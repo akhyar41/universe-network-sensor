@@ -39,8 +39,10 @@ constexpr uint32_t ALARM_ON_DURATION_MS = 3UL * 60UL * 1000UL;
 // Waktu (ms)
 constexpr uint32_t DEBOUNCE_MS = 50;
 constexpr uint32_t HEARTBEAT_MS = 30000;
+constexpr uint32_t LINK_RETRY_MS = 1000;
 constexpr uint32_t NODE_OFFLINE_MS = 90000;
-constexpr uint32_t WIFI_RETRY_MS = 5000;
+constexpr uint32_t WIFI_SCAN_WINDOW_MS = 4000;
+constexpr uint32_t WIFI_RETRY_MS = 20000;
 constexpr uint32_t MQTT_RETRY_MS = 5000;
 constexpr unsigned long SERIAL_BAUD = 115200;
 

@@ -60,7 +60,7 @@ Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 bool displayReady = false;
 uint32_t lastDisplayAt = 0;
 
-bool armed = true;
+bool armed = false; // boot DISARMED; sensor trigger yang menyalakan siklus
 bool doorOpen = false;
 bool doorAlarmLatched = false;
 bool alarmKnown = false;
@@ -72,12 +72,16 @@ ReplayGuard doorGuard;
 ReplayGuard alarmGuard;
 
 uint32_t lastWifiAttempt = 0;
+uint32_t lastChannelLock = 0;
 uint32_t lastMqttAttempt = 0;
 uint32_t lastEspNowAttempt = 0;
+bool wifiScanParked = false;
 uint32_t lastGatewayStatus = 0;
 bool espnowStarted = false;
 bool doorPeerReady = false;
 bool alarmPeerReady = false;
+bool bootAlarmSilenced = false;
+bool ignoreNextModeEcho = false;
 
 void enqueuePacket(const uint8_t *mac, const Packet &packet, int rssi) {
   portENTER_CRITICAL(&rxMux);
@@ -146,7 +150,9 @@ void publishSystemMode() {
   JsonDocument doc;
   doc["mode"] = armed ? "ARMED" : "DISARMED";
 
-  publishJson(TOPIC_SYSTEM_MODE, doc, true);
+  if (publishJson(TOPIC_SYSTEM_MODE, doc, true)) {
+    ignoreNextModeEcho = true;
+  }
 }
 
 void publishGatewayStatus() {
@@ -225,6 +231,9 @@ void startCooldown(bool lockTrigger) {
   cooldownLocksTrigger = lockTrigger;
 }
 
+void beginAlarmCycle();
+void endAlarmCycle();
+
 void sendAlarmCommand(uint8_t value) {
   if (!alarmPeerReady) {
     Serial.println("[GW] ALARM_CMD ditunda: MAC_ALARM/peer belum siap");
@@ -245,6 +254,45 @@ void sendAlarmCommand(uint8_t value) {
                 value ? "ON" : "OFF",
                 static_cast<unsigned long>(packet.seq),
                 result == ESP_OK ? "OK" : "GAGAL");
+}
+
+void beginAlarmCycle() {
+  if (cooldownActive()) {
+    return;
+  }
+  if (!alarmPeerReady) {
+    Serial.println("[GW] trigger diabaikan: node alarm belum connect");
+    return;
+  }
+
+  doorAlarmLatched = true;
+  armed = true;
+  sendAlarmCommand(1);
+  publishSystemMode();
+  Serial.println("[GW] sensor trigger -> ALARM ON, cooldown 180");
+}
+
+void endAlarmCycle() {
+  if (!armed && cooldownStartedAt == 0 && !cooldownLocksTrigger) {
+    return;
+  }
+
+  armed = false;
+  doorAlarmLatched = doorOpen;
+  cooldownStartedAt = 0;
+  cooldownLocksTrigger = false;
+  sendAlarmCommand(0);
+  publishSystemMode();
+  Serial.println("[GW] cooldown habis -> ALARM OFF, DISARMED");
+}
+
+void checkAlarmCycle() {
+  if (!armed || cooldownStartedAt == 0) {
+    return;
+  }
+  if (millis() - cooldownStartedAt >= ALARM_ON_DURATION_MS) {
+    endAlarmCycle();
+  }
 }
 
 void markNodeSeen(size_t index, int rssi) {
@@ -269,6 +317,8 @@ void handleDoorPacket(const Packet &packet, int rssi) {
     return;
   }
 
+  // Paket pertama saat node baru connect hanya dicatat, tidak menyalakan alarm.
+  const bool justConnected = !nodes[NODE_DOOR_INDEX].online;
   markNodeSeen(NODE_DOOR_INDEX, rssi);
 
   if (packet.type == PACKET_DOOR_EVENT || packet.type == PACKET_HEARTBEAT) {
@@ -281,11 +331,13 @@ void handleDoorPacket(const Packet &packet, int rssi) {
       doorAlarmLatched = false;
     }
 
-    // Kirim perintah alarm dulu supaya buzzer berbunyi sebelum publish TLS.
-    // Latch mencegah alarm menyala ulang terus saat pintu tetap terbuka.
-    if (armed && doorOpen && !doorAlarmLatched && !cooldownActive()) {
-      doorAlarmLatched = true;
-      sendAlarmCommand(1);
+    // Hanya tepi tertutup -> terbuka setelah node sudah connect yang memulai siklus.
+    if (!justConnected
+        && packet.type == PACKET_DOOR_EVENT
+        && changed
+        && open
+        && !cooldownActive()) {
+      beginAlarmCycle();
     }
 
     if (changed || packet.type == PACKET_DOOR_EVENT) {
@@ -314,14 +366,6 @@ void handleAlarmPacket(const Packet &packet, int rssi) {
     if (!alarmKnown || state != alarmState) {
       alarmState = state;
       alarmKnown = true;
-      if (state == 0) {
-        if (cooldownLocksTrigger) {
-          cooldownStartedAt = 0;
-          cooldownLocksTrigger = false;
-        }
-      } else if (!cooldownLocksTrigger) {
-        startCooldown(true);
-      }
       publishAlarmState();
     }
   }
@@ -375,23 +419,51 @@ void processEspNowQueue() {
 
 void handleWifi() {
   if (WiFi.status() == WL_CONNECTED) {
-    return;
-  }
-  if (millis() - lastWifiAttempt < WIFI_RETRY_MS) {
+    wifiScanParked = false;
     return;
   }
 
-  lastWifiAttempt = millis();
-  Serial.printf("[GW] Wi-Fi connect ke '%s'...\r\n", WIFI_SSID);
-  WiFi.disconnect();
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  const uint32_t since = millis() - lastWifiAttempt;
+
+  // Scan hanya sebentar. Setelah itu radio dikunci di channel ESP-NOW
+  // supaya node tidak menunggu heartbeat berikutnya kena scan.
+  if (!wifiScanParked && since >= WIFI_SCAN_WINDOW_MS) {
+    WiFi.disconnect(false, false);
+    wifiScanParked = true;
+    if (espnowStarted) {
+      espnowLockChannel(ESPNOW_CHANNEL);
+      lastChannelLock = millis();
+      Serial.printf("[GW] Wi-Fi belum ada, radio dikunci di channel %u\r\n", ESPNOW_CHANNEL);
+    }
+    return;
+  }
+
+  if (wifiScanParked && espnowStarted && millis() - lastChannelLock >= 1000) {
+    lastChannelLock = millis();
+    espnowLockChannel(ESPNOW_CHANNEL);
+  }
+
+  if (since >= WIFI_RETRY_MS) {
+    lastWifiAttempt = millis();
+    wifiScanParked = false;
+    Serial.printf("[GW] Wi-Fi connect ke '%s'...\r\n", WIFI_SSID);
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(false);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  }
 }
 
 void ensureEspNow() {
-  if (doorPeerReady && alarmPeerReady) {
-    return;
+  if (espnowStarted && doorPeerReady && alarmPeerReady) {
+    const bool doorGone = !macIsEmpty(MAC_DOOR) && !esp_now_is_peer_exist(MAC_DOOR);
+    const bool alarmGone = !macIsEmpty(MAC_ALARM) && !esp_now_is_peer_exist(MAC_ALARM);
+    if (!doorGone && !alarmGone) {
+      return;
+    }
+    doorPeerReady = doorPeerReady && !doorGone;
+    alarmPeerReady = alarmPeerReady && !alarmGone;
   }
-  if (millis() - lastEspNowAttempt < WIFI_RETRY_MS) {
+  if (!espnowStarted && lastEspNowAttempt != 0 && millis() - lastEspNowAttempt < LINK_RETRY_MS) {
     return;
   }
 
@@ -443,6 +515,12 @@ void ensureEspNow() {
       Serial.println("[GW] peer alarm OK");
     }
   }
+  if (alarmPeerReady && !bootAlarmSilenced) {
+    bootAlarmSilenced = true;
+    if (!armed) {
+      sendAlarmCommand(0);
+    }
+  }
 
   if (doorPeerReady && alarmPeerReady) {
     Serial.println("[GW] ESP-NOW siap (2 peer terenkripsi)");
@@ -472,13 +550,14 @@ void ensureMqtt() {
   }
 
   Serial.println("[GW] MQTT terhubung (TLS)");
+  // Timpa retained mode lama sebelum subscribe, supaya reset tetap DISARMED.
+  publishSystemMode();
   mqtt.subscribe(TOPIC_SYSTEM_MODE);
   mqtt.subscribe(TOPIC_ALARM_CMD);
 
   publishNodeStatus(NODE_DOOR_INDEX, nodes[NODE_DOOR_INDEX].online);
   publishNodeStatus(NODE_ALARM_INDEX, nodes[NODE_ALARM_INDEX].online);
   publishGatewayStatus();
-  publishSystemMode();
 
   if (alarmKnown) {
     publishAlarmState();
@@ -554,7 +633,7 @@ void refreshDisplay() {
   display.printf("ESP-NOW: %u/%u PEER\n",
                  static_cast<unsigned>((doorPeerReady ? 1 : 0) + (alarmPeerReady ? 1 : 0)),
                  static_cast<unsigned>(NODE_COUNT));
-  if (armed) {
+  if (armed && cooldownStartedAt != 0) {
     display.printf("STATUS: ARMED (%lu)\n", static_cast<unsigned long>(cooldownRemainingSec()));
   } else {
     display.println(F("STATUS: DISARMED"));
@@ -573,22 +652,20 @@ void onMqttMessage(char *topic, byte *payload, unsigned int length) {
   }
 
   if (strcmp(topic, TOPIC_SYSTEM_MODE) == 0) {
+    if (ignoreNextModeEcho) {
+      ignoreNextModeEcho = false;
+      return;
+    }
+
     const String mode = doc["mode"] | "";
 
-    if (mode.equalsIgnoreCase("ARMED")) {
-      armed = true;
-      Serial.println("[GW] mode = ARMED");
-
-      startCooldown(false);
-      if (doorOpen && !doorAlarmLatched) {
-        doorAlarmLatched = true;
-        sendAlarmCommand(1);
-      }
-    } else if (mode.equalsIgnoreCase("DISARMED")) {
-      armed = false;
-      doorAlarmLatched = false;
+    if (mode.equalsIgnoreCase("DISARMED")) {
       Serial.println("[GW] mode = DISARMED");
-      sendAlarmCommand(0);
+      if (armed || cooldownStartedAt != 0) {
+        endAlarmCycle();
+      } else {
+        sendAlarmCommand(0);
+      }
     }
 
     return;
@@ -598,9 +675,10 @@ void onMqttMessage(char *topic, byte *payload, unsigned int length) {
     const String command = doc["cmd"] | "";
 
     if (command.equalsIgnoreCase("OFF")) {
+      endAlarmCycle();
       sendAlarmCommand(0);
     } else if (command.equalsIgnoreCase("ON")) {
-      sendAlarmCommand(1);
+      beginAlarmCycle();
     }
   }
 }
@@ -610,7 +688,10 @@ void setup() {
   delay(100);
   Serial.println("\r\n[BOOT] deviceHub gateway (ESP-NOW <-> MQTT/TLS)");
 
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(false);
+  WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.printf("[GW] MAC = %s\r\n", WiFi.macAddress().c_str());
 
@@ -635,9 +716,6 @@ void setup() {
   mqtt.setKeepAlive(30);
 
   lastWifiAttempt = millis();
-  if (armed) {
-    startCooldown(false);
-  }
 }
 
 void loop() {
@@ -646,6 +724,7 @@ void loop() {
   // ESP-NOW tetap jalan tanpa Wi-Fi/internet; MQTT hanya untuk dashboard.
   ensureEspNow();
   processEspNowQueue();
+  checkAlarmCycle();
 
   if (WiFi.status() == WL_CONNECTED) {
     ensureMqtt();

@@ -25,7 +25,7 @@ inline bool espnowBegin(uint8_t channel, const uint8_t *pmk, bool setChannel) {
   }
 
   const esp_err_t initResult = esp_now_init();
-  if (initResult != ESP_OK) {
+  if (initResult != ESP_OK && initResult != ESP_ERR_ESPNOW_EXIST) {
     Serial.printf("[ESP-NOW] init gagal (%d)\r\n", initResult);
     return false;
   }
@@ -55,6 +55,14 @@ inline bool espnowBegin(uint8_t channel, const uint8_t *pmk, bool setChannel) {
   Serial.printf("[ESP-NOW] ps=%d bw=%d proto=%d\r\n", psResult, bwResult, protoResult);
 
   return true;
+}
+
+// Kunci radio di channel node. Dipakai gateway saat Wi-Fi/AP mati,
+// supaya scan STA tidak meninggalkan channel ESP-NOW.
+inline void espnowLockChannel(uint8_t channel) {
+  esp_wifi_set_promiscuous(true);
+  esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_promiscuous(false);
 }
 
 inline bool macEquals(const uint8_t *left, const uint8_t *right) {

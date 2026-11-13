@@ -10,6 +10,8 @@
 
 uint32_t sequence = 0;
 uint32_t lastHeartbeat = 0;
+volatile uint8_t txResult = 0;
+bool linkUp = false;
 volatile uint32_t alarmOnAt = 0;
 volatile bool alarmTimerActive = false;
 volatile bool alarmOn = false;
@@ -40,6 +42,9 @@ void sendPacket(uint8_t type, uint8_t value) {
   Packet packet = makePacket(type, NODE_ALARM, ++sequence, value);
 
   const esp_err_t result = esp_now_send(MAC_GATEWAY, reinterpret_cast<uint8_t *>(&packet), sizeof(packet));
+  if (result != ESP_OK) {
+    linkUp = false;
+  }
   Serial.printf("[ALARM] kirim type=%u value=%u seq=%lu -> %s\r\n",
                 type,
                 value,
@@ -103,9 +108,15 @@ void setup() {
   esp_now_register_recv_cb([](const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     handlePacket(info->src_addr, data, len);
   });
+  esp_now_register_send_cb([](const wifi_tx_info_t *, esp_now_send_status_t status) {
+    txResult = status == ESP_NOW_SEND_SUCCESS ? 1 : 2;
+  });
 #else
   esp_now_register_recv_cb([](const uint8_t *mac, const uint8_t *data, int len) {
     handlePacket(mac, data, len);
+  });
+  esp_now_register_send_cb([](const uint8_t *, esp_now_send_status_t status) {
+    txResult = status == ESP_NOW_SEND_SUCCESS ? 1 : 2;
   });
 #endif
 
@@ -113,7 +124,18 @@ void setup() {
   lastHeartbeat = millis();
 }
 
+void pollLink() {
+  const uint8_t result = txResult;
+  if (result == 0) {
+    return;
+  }
+  txResult = 0;
+  linkUp = result == 1;
+}
+
 void loop() {
+  pollLink();
+
   if (alarmOn && alarmTimerActive && millis() - alarmOnAt >= ALARM_ON_DURATION_MS) {
     Serial.println("[ALARM] auto-off setelah 3 menit");
     applyAlarm(false);
@@ -125,7 +147,7 @@ void loop() {
     sendPacket(PACKET_ACK, alarmOn ? 1 : 0);
   }
 
-  if (millis() - lastHeartbeat >= HEARTBEAT_MS) {
+  if (millis() - lastHeartbeat >= (linkUp ? HEARTBEAT_MS : LINK_RETRY_MS)) {
     lastHeartbeat = millis();
     sendPacket(PACKET_HEARTBEAT, alarmOn ? 1 : 0);
   }

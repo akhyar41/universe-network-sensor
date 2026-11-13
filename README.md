@@ -115,10 +115,9 @@ mosquitto_pub --url mqtts://broker.emqx.io:8883 \
   - relay GPIO **6**
   - status LED GPIO **8**
   It replies `ACK` and sends a heartbeat every 30 s.
-- Gateway validates sender MAC and node id, applies a monotonic `seq` check (a lower `ts` means the node rebooted and resets the guard), publishes door state, and forwards `ALARM_CMD` when ARMED.
-- `DISARMED` turns the alarm off. `ARMED` while the door is open turns it on immediately.
-- Alarm stays ON for **3 minutes** (`ALARM_ON_DURATION_MS` in `common/config.h`) after a trigger, then turns itself off and sends a heartbeat.
-- The gateway boots **ARMED**, keeps ESP-NOW running without Wi-Fi, and latches a door trigger so an open door does not restart the alarm. A cooldown of the same 3 minutes blocks another trigger until it reaches 0. OLED shows `WIFI`/`MQTT` as `CONNECT` or `DISCONNECT`, door and alarm as `ONLINE` or `OFFLINE`, and `STATUS: ARMED (seconds)` at the bottom.
+- Gateway validates sender MAC and node id, applies a monotonic `seq` check (a lower `ts` means the node rebooted and resets the guard), and publishes door state.
+- The gateway boots **DISARMED** with no cooldown. A node coming online does not start the alarm. A later door-open edge starts it: alarm ON, OLED `STATUS: ARMED (180)` counting down. At 0 the alarm turns off and the OLED returns to `STATUS: DISARMED`. Another open while the countdown is running is ignored. Closing the door does not cancel the countdown.
+- While the AP is down the gateway scans Wi-Fi for 4 s, then locks the radio on `ESPNOW_CHANNEL` and tries again after 20 s. Door and alarm retry every 1 s until a send is acknowledged, then return to the 30 s heartbeat.
 - Missing heartbeat for 90 s publishes `online:false` on the node status topic.
 - The gateway republishes its own `online:true` status every 30 s; door/alarm statuses are refreshed on each heartbeat.
 - **TX power is 8.5 dBm**, set centrally in `espnowBegin()`. The old working IoT firmware used the same value; 19.5 dBm made C3 transmissions unstable and caused `TX FAIL`.
@@ -129,17 +128,18 @@ SSD1306 128×64, I2C SDA GPIO 6 / SCL GPIO 7, address `0x3C`, refreshed every 50
 
 ```
 WSN GATEWAY
-WIFI : OK
-MQTT : ONLINE
+WIFI: CONNECT
+MQTT: CONNECT
 DEV  : 2/2
-MODE : DISARMED
 DOOR : ONLINE
 ALARM: ONLINE
 ESP-NOW: 2/2 PEER
+STATUS: DISARMED
 ```
 
-- `MQTT : OFF rc=N` — TLS/connection failure code from PubSubClient.
-- `NO WIFI` — the gateway is not associated to the AP.
+During an alarm the last line is `STATUS: ARMED (180)` and counts down to `0`, then returns to `STATUS: DISARMED`.
+
+- `WIFI: DISCONNECT` / `MQTT: DISCONNECT` — that link is down. ESP-NOW still runs.
 - `NO DATA` — node has never been seen since boot.
 - `OFFLINE` — last heartbeat older than 90 s.
 - `ESP-NOW: x/2 PEER` — how many node peers are registered; `1/2` usually means one MAC is still zero in `common/secrets.h`.
