@@ -1,0 +1,34 @@
+import Root from "./table.svelte"
+import Body from "./table-body.svelte"
+import Caption from "./table-caption.svelte"
+import Cell from "./table-cell.svelte"
+import Footer from "./table-footer.svelte"
+import Head from "./table-head.svelte"
+import HeadSorting from "./table-head-sorting.svelte"
+import Header from "./table-header.svelte"
+import Row from "./table-row.svelte"
+import Pagination from "./table-pagination.svelte"
+
+export {
+  Root,
+  Body,
+  Caption,
+  Cell,
+  Footer,
+  Head,
+  HeadSorting,
+  Header,
+  Row,
+  Pagination,
+  //
+  Root as Table,
+  Body as TableBody,
+  Caption as TableCaption,
+  Cell as TableCell,
+  Footer as TableFooter,
+  Head as TableHead,
+  HeadSorting as TableHeadSorting,
+  Header as TableHeader,
+  Row as TableRow,
+  Pagination as TablePagination,
+}

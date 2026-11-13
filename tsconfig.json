@@ -1,0 +1,29 @@
+{
+    "extends": "$app/tsconfig",
+    "compilerOptions": {
+        "target": "es2023",
+        "types": [
+            "$app/types",
+            "node",
+            "svelte",
+            "vite/client"
+        ],
+        "rewriteRelativeImportExtensions": true,
+        "paths": {
+            "#lib": ["./src/lib"],
+            "#lib/*": ["./src/lib/*"],
+            "$app/types": ["./.svelte-kit/types/index.d.ts"]
+        },
+        "sourceMap": true,
+        "strict": true,
+        "moduleResolution": "Bundler",
+        "useDefineForClassFields": true,
+        "module": "ESNext"
+    },
+    "include": [
+      "src",
+      "src/**/*.json",
+      ".svelte-kit",
+      "vite.config.ts",
+    ]
+}
