@@ -117,6 +117,11 @@ Pengujian yang dilakukan:
 - Jika wiring fisik ternyata berkebalikan, ubah `DOOR_INVERT` menjadi `false`.
 - Status: berfungsi; toggle fisik tetap disarankan untuk memastikan transisi.
 
+### Kasus 9 — Durasi alarm 3 menit
+- Alarm menyala selama **3 menit** setelah trigger (`ALARM_ON_DURATION_MS = 180000` di `common/config.h`).
+- Timer berjalan di node alarm: setelah 3 menit, relay/buzzer dimatikan dan node mengirim heartbeat `value=0` supaya gateway segera mempublikasikan `alarm/state OFF`.
+- Status: terverifikasi lewat MQTT; `alarm/state` menjadi `ON` pada detik 6 dan kembali `OFF` otomatis pada detik 186 (180 detik setelah ON).
+
 ## 3. Timeline (perkiraan, dari log/timestamp file)
 
 | Waktu | Kejadian |

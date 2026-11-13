@@ -117,6 +117,7 @@ mosquitto_pub --url mqtts://broker.emqx.io:8883 \
   It replies `ACK` and sends a heartbeat every 30 s.
 - Gateway validates sender MAC and node id, applies a monotonic `seq` check (a lower `ts` means the node rebooted and resets the guard), publishes door state, and forwards `ALARM_CMD` when ARMED.
 - `DISARMED` turns the alarm off. `ARMED` while the door is open turns it on immediately.
+- Alarm stays ON for **3 minutes** (`ALARM_ON_DURATION_MS` in `common/config.h`) after a trigger, then turns itself off and sends a heartbeat.
 - Missing heartbeat for 90 s publishes `online:false` on the node status topic.
 - The gateway republishes its own `online:true` status every 30 s; door/alarm statuses are refreshed on each heartbeat.
 - **TX power is 8.5 dBm**, set centrally in `espnowBegin()`. The old working IoT firmware used the same value; 19.5 dBm made C3 transmissions unstable and caused `TX FAIL`.

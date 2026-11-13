@@ -10,11 +10,21 @@
 
 uint32_t sequence = 0;
 uint32_t lastHeartbeat = 0;
+volatile uint32_t alarmOnAt = 0;
+volatile bool alarmTimerActive = false;
 volatile bool alarmOn = false;
 volatile bool ackPending = false;
 ReplayGuard commandGuard;
 
 void applyAlarm(bool on) {
+  if (on && !alarmOn) {
+    alarmOnAt = millis();
+    alarmTimerActive = true;
+  }
+  if (!on) {
+    alarmTimerActive = false;
+  }
+
   alarmOn = on;
 
   digitalWrite(PIN_RELAY, on ? RELAY_ACTIVE_LEVEL : !RELAY_ACTIVE_LEVEL);
@@ -104,6 +114,12 @@ void setup() {
 }
 
 void loop() {
+  if (alarmOn && alarmTimerActive && millis() - alarmOnAt >= ALARM_ON_DURATION_MS) {
+    Serial.println("[ALARM] auto-off setelah 3 menit");
+    applyAlarm(false);
+    sendPacket(PACKET_HEARTBEAT, 0);
+  }
+
   if (ackPending) {
     ackPending = false;
     sendPacket(PACKET_ACK, alarmOn ? 1 : 0);

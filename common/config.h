@@ -33,6 +33,9 @@ constexpr uint8_t RELAY_ACTIVE_LEVEL = HIGH;
 #define ESPNOW_ENCRYPT 1
 #endif
 
+// Durasi alarm menyala setelah trigger sensor (3 menit).
+constexpr uint32_t ALARM_ON_DURATION_MS = 3UL * 60UL * 1000UL;
+
 // Waktu (ms)
 constexpr uint32_t DEBOUNCE_MS = 50;
 constexpr uint32_t HEARTBEAT_MS = 30000;
