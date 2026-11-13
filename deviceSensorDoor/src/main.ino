@@ -16,7 +16,8 @@ int stableReading = HIGH;
 uint32_t lastEdgeMs = 0;
 
 bool isDoorOpen(uint8_t reading) {
-  return reading != REED_CLOSED_LEVEL;
+  const bool physicallyClosed = reading == REED_CLOSED_LEVEL;
+  return DOOR_INVERT ? physicallyClosed : !physicallyClosed;
 }
 
 // Dua pin didukung: reed utama GPIO4 dan switch simulasi GPIO3.

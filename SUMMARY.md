@@ -17,19 +17,19 @@ Terverifikasi di broker (`kel1/wsn/#`):
 kel1/wsn/node/gateway/status {"online":true}
 kel1/wsn/node/door/status    {"online":true}
 kel1/wsn/node/alarm/status   {"online":true}
-kel1/wsn/door/state          {"state":"OPEN","seq":10,"ts":...}
+kel1/wsn/door/state          {"state":"CLOSED","seq":3,"ts":...}
 kel1/wsn/alarm/state         {"state":"OFF"}
 ```
 
 OLED seharusnya menampilkan `DEV : 2/2`, `DOOR : ONLINE`, `ALARM: ONLINE`, dan `ESP-NOW: 2/2 PEER`.
 
-Pengujian ARM/DISARM saat pintu sudah terbuka:
+Pengujian ARM/DISARM dilakukan sebelum polaritas pintu dibalik, saat `door/state` masih `OPEN`:
 
 ```text
 OFF -> ARMED -> ON -> DISARMED -> OFF
 ```
 
-Artinya aturan sudah sesuai: ARMED + pintu terbuka menyalakan alarm; DISARMED mematikan alarm.
+Setelah `DOOR_INVERT=true`, kondisi idle menjadi `CLOSED`; untuk menguji alarm, ubah switch sampai `door/state` menjadi `OPEN`, lalu kirim `ARMED`. Aturan sistem tetap: ARMED + pintu terbuka menyalakan alarm; DISARMED mematikan alarm.
 
 ## 2. Temuan per kasus
 
@@ -111,10 +111,11 @@ Pengujian yang dilakukan:
 
 ### Kasus 8 — Input switch pintu
 - Node pintu membaca GPIO 4 (default AGENTS) dan GPIO 3 (wiring board tombol lama).
-- `INPUT_PULLUP`, `LOW` = tertutup, debounce 50 ms.
-- Kondisi awal pada pengujian terakhir: `OPEN` (switch belum tertutup).
-- Uji toggle fisik tetap disarankan: pantau `door/state` dan baris `DOOR` di OLED.
-- Status: logika sudah diimplementasikan; perubahan switch secara fisik belum tercatat.
+- `INPUT_PULLUP`, level aktif `LOW`, debounce 50 ms.
+- Polaritas switch dibalik dengan `DOOR_INVERT=true` di `common/config.h`; kondisi idle sekarang dilaporkan `CLOSED`, dan event/status mengikuti logika baru.
+- Terverifikasi lewat MQTT: `door/state` berubah dari `OPEN` menjadi `CLOSED` setelah firmware baru di-upload.
+- Jika wiring fisik ternyata berkebalikan, ubah `DOOR_INVERT` menjadi `false`.
+- Status: berfungsi; toggle fisik tetap disarankan untuk memastikan transisi.
 
 ## 3. Timeline (perkiraan, dari log/timestamp file)
 
@@ -165,7 +166,7 @@ pio device monitor --port COM3 --baud 115200
 - MAC hub, pintu, dan alarm
 
 `common/config.h`:
-- Pintu: GPIO 4 + GPIO 3, `INPUT_PULLUP`, LOW = tertutup
+- Pintu: GPIO 4 + GPIO 3, `INPUT_PULLUP`, `DOOR_INVERT=true` (idle = CLOSED)
 - Alarm: buzzer GPIO 5/0/1, relay GPIO 6, LED GPIO 8
 - OLED gateway: SDA 6, SCL 7, `0x3C`
 - Heartbeat 30 detik, ambang offline 90 detik

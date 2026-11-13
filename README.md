@@ -109,7 +109,7 @@ mosquitto_pub --url mqtts://broker.emqx.io:8883 \
 
 ## Behavior
 
-- Door reads **GPIO 4 and GPIO 3** (`INPUT_PULLUP`, `LOW` = closed), debounced 50 ms. Every change sends `DOOR_EVENT`; a heartbeat is sent every 30 s carrying the current door state.
+- Door reads **GPIO 4 and GPIO 3** (`INPUT_PULLUP`, `LOW` = active), debounced 50 ms. `DOOR_INVERT=true` in `common/config.h` flips the reported state for the current switch polarity (idle = `CLOSED`); set it to `false` if the wiring is the other way around. Every change sends `DOOR_EVENT`; a heartbeat is sent every 30 s carrying the current door state.
 - Alarm listens only for `ALARM_CMD` from the gateway MAC, drives:
   - buzzer GPIO **5** (also GPIO 0 and 1 for the old alarm-board wiring)
   - relay GPIO **6**

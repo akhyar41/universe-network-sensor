@@ -19,8 +19,10 @@ constexpr uint8_t OLED_WIDTH = 128;
 constexpr uint8_t OLED_HEIGHT = 64;
 constexpr uint32_t DISPLAY_REFRESH_MS = 500;
 
-// Reed switch INPUT_PULLUP: LOW = pintu tertutup
+// Reed switch INPUT_PULLUP: LOW saat switch aktif
 constexpr uint8_t REED_CLOSED_LEVEL = LOW;
+// Balik logika pintu jika modul switch memberi polarity terbalik.
+constexpr bool DOOR_INVERT = true;
 
 // Modul buzzer/relay aktif HIGH
 constexpr uint8_t BUZZER_ACTIVE_LEVEL = HIGH;
