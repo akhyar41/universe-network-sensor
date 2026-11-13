@@ -120,6 +120,7 @@ Pengujian yang dilakukan:
 ### Kasus 9 — Durasi alarm 3 menit
 - Alarm menyala selama **3 menit** setelah trigger (`ALARM_ON_DURATION_MS = 180000` di `common/config.h`).
 - Timer berjalan di node alarm: setelah 3 menit, relay/buzzer dimatikan dan node mengirim heartbeat `value=0` supaya gateway segera mempublikasikan `alarm/state OFF`.
+- Gateway boot `ARMED`, ESP-NOW tetap jalan tanpa Wi-Fi, dan latch `doorAlarmLatched` mencegah alarm ON berulang saat pintu tetap terbuka. Cooldown 180 detik di OLED (`STATUS: ARMED (n)`) mengunci trigger berikutnya sampai habis.
 - Status: terverifikasi lewat MQTT; `alarm/state` menjadi `ON` pada detik 6 dan kembali `OFF` otomatis pada detik 186 (180 detik setelah ON).
 
 ## 3. Timeline (perkiraan, dari log/timestamp file)

@@ -60,10 +60,13 @@ Adafruit_SSD1306 display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 bool displayReady = false;
 uint32_t lastDisplayAt = 0;
 
-bool armed = false;
+bool armed = true;
 bool doorOpen = false;
+bool doorAlarmLatched = false;
 bool alarmKnown = false;
 uint8_t alarmState = 0;
+uint32_t cooldownStartedAt = 0;
+bool cooldownLocksTrigger = false;
 uint32_t commandSequence = 0;
 ReplayGuard doorGuard;
 ReplayGuard alarmGuard;
@@ -139,6 +142,13 @@ void publishNodeStatus(size_t index, bool online) {
   publishJson(nodes[index].statusTopic, doc, true);
 }
 
+void publishSystemMode() {
+  JsonDocument doc;
+  doc["mode"] = armed ? "ARMED" : "DISARMED";
+
+  publishJson(TOPIC_SYSTEM_MODE, doc, true);
+}
+
 void publishGatewayStatus() {
   JsonDocument doc;
   doc["online"] = true;
@@ -193,10 +203,39 @@ void sendAck(const uint8_t *mac, uint32_t seq, uint8_t value) {
   esp_now_send(mac, reinterpret_cast<uint8_t *>(&ack), sizeof(ack));
 }
 
+uint32_t cooldownRemainingSec() {
+  if (cooldownStartedAt == 0) {
+    return 0;
+  }
+
+  const uint32_t elapsed = millis() - cooldownStartedAt;
+  if (elapsed >= ALARM_ON_DURATION_MS) {
+    return 0;
+  }
+
+  return (ALARM_ON_DURATION_MS - elapsed) / 1000UL;
+}
+
+bool cooldownActive() {
+  return cooldownLocksTrigger && cooldownRemainingSec() > 0;
+}
+
+void startCooldown(bool lockTrigger) {
+  cooldownStartedAt = millis();
+  cooldownLocksTrigger = lockTrigger;
+}
+
 void sendAlarmCommand(uint8_t value) {
   if (!alarmPeerReady) {
     Serial.println("[GW] ALARM_CMD ditunda: MAC_ALARM/peer belum siap");
     return;
+  }
+
+  if (value != 0) {
+    startCooldown(true);
+  } else {
+    cooldownStartedAt = 0;
+    cooldownLocksTrigger = false;
   }
 
   Packet packet = makePacket(PACKET_ALARM_CMD, NODE_GATEWAY, ++commandSequence, value);
@@ -238,8 +277,14 @@ void handleDoorPacket(const Packet &packet, int rssi) {
 
     doorOpen = open;
 
+    if (!doorOpen) {
+      doorAlarmLatched = false;
+    }
+
     // Kirim perintah alarm dulu supaya buzzer berbunyi sebelum publish TLS.
-    if (armed && doorOpen && alarmState == 0) {
+    // Latch mencegah alarm menyala ulang terus saat pintu tetap terbuka.
+    if (armed && doorOpen && !doorAlarmLatched && !cooldownActive()) {
+      doorAlarmLatched = true;
       sendAlarmCommand(1);
     }
 
@@ -269,6 +314,14 @@ void handleAlarmPacket(const Packet &packet, int rssi) {
     if (!alarmKnown || state != alarmState) {
       alarmState = state;
       alarmKnown = true;
+      if (state == 0) {
+        if (cooldownLocksTrigger) {
+          cooldownStartedAt = 0;
+          cooldownLocksTrigger = false;
+        }
+      } else if (!cooldownLocksTrigger) {
+        startCooldown(true);
+      }
       publishAlarmState();
     }
   }
@@ -345,7 +398,7 @@ void ensureEspNow() {
   lastEspNowAttempt = millis();
 
   if (!espnowStarted) {
-    if (!espnowBegin(0, ESPNOW_PMK, false)) {
+    if (!espnowBegin(ESPNOW_CHANNEL, ESPNOW_PMK, true)) {
       Serial.println("[GW] ESP-NOW init gagal, dicoba lagi");
       return;
     }
@@ -379,13 +432,13 @@ void ensureEspNow() {
   }
 
   if (!doorPeerReady && !macIsEmpty(MAC_DOOR)) {
-    doorPeerReady = espnowAddPeer(MAC_DOOR, ESPNOW_LMK_DOOR, WiFi.channel());
+    doorPeerReady = espnowAddPeer(MAC_DOOR, ESPNOW_LMK_DOOR, ESPNOW_CHANNEL);
     if (doorPeerReady) {
       Serial.println("[GW] peer door OK");
     }
   }
   if (!alarmPeerReady && !macIsEmpty(MAC_ALARM)) {
-    alarmPeerReady = espnowAddPeer(MAC_ALARM, ESPNOW_LMK_ALARM, WiFi.channel());
+    alarmPeerReady = espnowAddPeer(MAC_ALARM, ESPNOW_LMK_ALARM, ESPNOW_CHANNEL);
     if (alarmPeerReady) {
       Serial.println("[GW] peer alarm OK");
     }
@@ -425,6 +478,7 @@ void ensureMqtt() {
   publishNodeStatus(NODE_DOOR_INDEX, nodes[NODE_DOOR_INDEX].online);
   publishNodeStatus(NODE_ALARM_INDEX, nodes[NODE_ALARM_INDEX].online);
   publishGatewayStatus();
+  publishSystemMode();
 
   if (alarmKnown) {
     publishAlarmState();
@@ -489,25 +543,22 @@ void refreshDisplay() {
   display.setCursor(0, 0);
 
   display.println(F("WSN GATEWAY"));
-  display.printf("WIFI : %s\n", WiFi.status() == WL_CONNECTED ? "OK" : "DOWN");
-
-  if (WiFi.status() != WL_CONNECTED) {
-    display.println(F("MQTT : NO WIFI"));
-  } else if (mqtt.connected()) {
-    display.println(F("MQTT : ONLINE"));
-  } else {
-    display.printf("MQTT : OFF rc=%d\n", mqtt.state());
-  }
+  display.printf("WIFI: %s\n", WiFi.status() == WL_CONNECTED ? "CONNECT" : "DISCONNECT");
+  display.printf("MQTT: %s\n", mqtt.connected() ? "CONNECT" : "DISCONNECT");
 
   display.printf("DEV  : %u/%u\n",
                  static_cast<unsigned>(onlineNodeCount()),
                  static_cast<unsigned>(NODE_COUNT));
-  display.printf("MODE : %s\n", armed ? "ARMED" : "DISARMED");
-  display.printf("DOOR : %s\n", nodeLabel(NODE_DOOR_INDEX));
-  display.printf("ALARM: %s\n", nodeLabel(NODE_ALARM_INDEX));
+  display.printf("DOOR : %s\n", nodes[NODE_DOOR_INDEX].online ? "ONLINE" : "OFFLINE");
+  display.printf("ALARM: %s\n", nodes[NODE_ALARM_INDEX].online ? "ONLINE" : "OFFLINE");
   display.printf("ESP-NOW: %u/%u PEER\n",
                  static_cast<unsigned>((doorPeerReady ? 1 : 0) + (alarmPeerReady ? 1 : 0)),
                  static_cast<unsigned>(NODE_COUNT));
+  if (armed) {
+    display.printf("STATUS: ARMED (%lu)\n", static_cast<unsigned long>(cooldownRemainingSec()));
+  } else {
+    display.println(F("STATUS: DISARMED"));
+  }
 
   display.display();
 }
@@ -528,11 +579,14 @@ void onMqttMessage(char *topic, byte *payload, unsigned int length) {
       armed = true;
       Serial.println("[GW] mode = ARMED");
 
-      if (doorOpen && alarmState == 0) {
+      startCooldown(false);
+      if (doorOpen && !doorAlarmLatched) {
+        doorAlarmLatched = true;
         sendAlarmCommand(1);
       }
     } else if (mode.equalsIgnoreCase("DISARMED")) {
       armed = false;
+      doorAlarmLatched = false;
       Serial.println("[GW] mode = DISARMED");
       sendAlarmCommand(0);
     }
@@ -581,24 +635,28 @@ void setup() {
   mqtt.setKeepAlive(30);
 
   lastWifiAttempt = millis();
+  if (armed) {
+    startCooldown(false);
+  }
 }
 
 void loop() {
   handleWifi();
 
+  // ESP-NOW tetap jalan tanpa Wi-Fi/internet; MQTT hanya untuk dashboard.
+  ensureEspNow();
+  processEspNowQueue();
+
   if (WiFi.status() == WL_CONNECTED) {
-    ensureEspNow();
-    processEspNowQueue();
     ensureMqtt();
 
     if (mqtt.connected()) {
       mqtt.loop();
       refreshGatewayStatus();
     }
-
-    checkNodesOffline();
   }
 
+  checkNodesOffline();
   refreshDisplay();
   delay(10);
 }

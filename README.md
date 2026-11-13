@@ -118,6 +118,7 @@ mosquitto_pub --url mqtts://broker.emqx.io:8883 \
 - Gateway validates sender MAC and node id, applies a monotonic `seq` check (a lower `ts` means the node rebooted and resets the guard), publishes door state, and forwards `ALARM_CMD` when ARMED.
 - `DISARMED` turns the alarm off. `ARMED` while the door is open turns it on immediately.
 - Alarm stays ON for **3 minutes** (`ALARM_ON_DURATION_MS` in `common/config.h`) after a trigger, then turns itself off and sends a heartbeat.
+- The gateway boots **ARMED**, keeps ESP-NOW running without Wi-Fi, and latches a door trigger so an open door does not restart the alarm. A cooldown of the same 3 minutes blocks another trigger until it reaches 0. OLED shows `WIFI`/`MQTT` as `CONNECT` or `DISCONNECT`, door and alarm as `ONLINE` or `OFFLINE`, and `STATUS: ARMED (seconds)` at the bottom.
 - Missing heartbeat for 90 s publishes `online:false` on the node status topic.
 - The gateway republishes its own `online:true` status every 30 s; door/alarm statuses are refreshed on each heartbeat.
 - **TX power is 8.5 dBm**, set centrally in `espnowBegin()`. The old working IoT firmware used the same value; 19.5 dBm made C3 transmissions unstable and caused `TX FAIL`.
